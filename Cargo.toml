@@ -1,0 +1,8 @@
+[package]
+name = "rust-roguelike"
+version = "0.1.0"
+authors = ["Romain Chossart <romainchossart@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+tcod = { git = "https://github.com/rjungemann/tcod-rs.git", branch = "fix-sdl2-rendering-mojave" }
