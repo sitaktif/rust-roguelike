@@ -62,6 +62,20 @@ impl Tile {
 
 type Map = Vec<Vec<Tile>>;
 
+#[derive(Clone, Copy, Debug)]
+struct Rect {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+}
+
+impl Rect {
+    pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Rect { x1: x, y1: y, x2: x + w, y2: y + h }
+    }
+}
+
 fn main() {
     println!("Hello, world!");
 
@@ -72,11 +86,11 @@ fn main() {
     .title("Rust/libtcod tutorial")
     .init();
 
-    let mut con = Offscreen::new(SCREEN_WIDTH, SCREEN_HEIGHT);
+    let mut con = Offscreen::new(MAP_WIDTH, MAP_HEIGHT);
 
     tcod::system::set_fps(LIMIT_FPS);
 
-    let player = Object::new(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, '@', colors::WHITE);
+    let player = Object::new(25, 23, '@', colors::WHITE);
     let npc = Object::new(player.x - 1, player.y -3, '@', colors::YELLOW);
 
     let mut objects = [player, npc];
@@ -118,18 +132,29 @@ fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &Ma
         }
     }
     // Overlay the console over the root
-    blit(con, (0, 0), (SCREEN_WIDTH, SCREEN_HEIGHT), root, (0, 0), 1.0, 1.0);
+    blit(con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), root, (0, 0), 1.0, 1.0);
 }
 
 fn make_map() -> Map {
-    // Fill map with traversable tiles
+    // Fill map with untraversable tiles
     // vec![ITEM;NUM] is a macro to create a Vec of size NUM filled with ITEM (where ITEM is
     // evaluated at each iteration).
-    let mut map = vec![vec![Tile::empty(); MAP_HEIGHT as usize]; MAP_WIDTH as usize];
+    let mut map = vec![vec![Tile::wall(); MAP_HEIGHT as usize]; MAP_WIDTH as usize];
 
-    map[30][22] = Tile::wall();
-    map[50][22] = Tile::wall();
+    let room1 = Rect::new(20, 15, 10, 15);
+    let room2 = Rect::new(50, 15, 10, 15);
+    create_room(room1, &mut map);
+    create_room(room2, &mut map);
+
     map
+}
+
+fn create_room(rect: Rect, map: &mut Map) {
+    for x in (rect.x1 + 1)..rect.x2 {
+        for y in (rect.y1 + 1)..rect.y2 {
+            map[x as usize][y as usize] = Tile::empty();
+        }
+    }
 }
 
 /// Handle a key press event
