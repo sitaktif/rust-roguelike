@@ -1,5 +1,7 @@
 extern crate tcod;
 
+use std::cmp::*;
+
 use tcod::console::*;
 use tcod::colors::{self,Color};
 use tcod::input::Key;
@@ -146,6 +148,8 @@ fn make_map() -> Map {
     create_room(room1, &mut map);
     create_room(room2, &mut map);
 
+    create_x_tunnel(25, 55, 23, &mut map);
+
     map
 }
 
@@ -154,6 +158,18 @@ fn create_room(rect: Rect, map: &mut Map) {
         for y in (rect.y1 + 1)..rect.y2 {
             map[x as usize][y as usize] = Tile::empty();
         }
+    }
+}
+
+fn create_x_tunnel(x1: i32, x2: i32, y: i32, map: &mut Map) {
+    for x in min(x1, x2)..(max(x1, x2) + 1) {
+        map[x as usize][y as usize] = Tile::empty();
+    }
+}
+
+fn create_y_tunnel(y1: i32, y2: i32, x: i32, map: &mut Map) {
+    for y in min(y1, y2)..(max(y1, y2) + 1) {
+        map[x as usize][y as usize] = Tile::empty();
     }
 }
 
