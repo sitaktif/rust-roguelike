@@ -8,6 +8,7 @@ use tcod::console::*;
 use tcod::colors::{self,Color};
 use tcod::input::Key;
 use tcod::input::KeyCode::*;
+use tcod::map::{Map as FovMap, FovAlgorithm};
 
 const SCREEN_WIDTH: i32 = 80;
 const SCREEN_HEIGHT: i32 = 50;
@@ -21,7 +22,13 @@ const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
 
 const COLOR_DARK_WALL: Color = Color { r: 0, g: 0, b: 100 };
+const COLOR_LIGHT_WALL: Color = Color { r: 130, g: 110, b: 50 };
 const COLOR_DARK_GROUND: Color = Color { r: 50, g: 50, b: 150 };
+const COLOR_LIGHT_GROUND: Color = Color { r: 200, g: 180, b: 50 };
+
+const FOV_ALGO: FovAlgorithm = FovAlgorithm::Basic;
+const FOV_LIGHT_WALLS: bool = true;
+const TORCH_RADIUS: i32 = 10;
 
 struct Object {
     x: i32,
@@ -112,18 +119,34 @@ fn main() {
     // let npc = Object::new(player.x - 1, player.y -3, '@', colors::YELLOW);
     let mut objects = [player];
 
+    // Fill the field-of-view map
+    let mut fov_map = FovMap::new(MAP_WIDTH, MAP_HEIGHT);
+    for y in 0..MAP_HEIGHT {
+        for x in 0..MAP_WIDTH {
+            fov_map.set(x, y,
+                        map[x as usize][y as usize].transparent,
+                        map[x as usize][y as usize].traversable);
+        }
+    }
+
+    let mut prev_player_position = (-1, -1);
 
     while !root.window_closed() {
+        // clear the screen of the previous frame
+        con.clear();
+
         con.set_default_foreground(colors::WHITE);
-        render_all(&mut root, &mut con, &objects, &map);
+        let player = &mut objects[0];
+
+        let fov_recompute = prev_player_position != (player.x, player.y);
+        render_all(&mut root, &mut con, &objects, &map, &mut fov_map, fov_recompute);
 
         root.flush();
-        for obj in objects.iter() {
-            obj.clear(&mut con);
-        }
+
+        let player = &mut objects[0];
+        prev_player_position = (player.x, player.y);
 
         // Handle keys and exit if needed
-        let player = &mut objects[0];
         let exit = handle_keys(&mut root, player, &map);
         if exit {
             break;
@@ -132,22 +155,36 @@ fn main() {
 
 }
 
-fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &Map) {
-    // Draw all the objects in the list
-    for obj in objects {
-        obj.draw(con)
+fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &Map,
+              fov_map: &mut FovMap, fov_recompute: bool) {
+    if fov_recompute {
+        // recompute FOV if needed (the player moved or something)
+        let player = &objects[0];
+        fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
     }
 
     for y in 0..MAP_HEIGHT {
         for x in 0..MAP_WIDTH {
-            let opaque = !map[x as usize][y as usize].transparent;
-            if opaque {
-                con.set_char_background(x, y, COLOR_DARK_WALL, BackgroundFlag::Set);
-            } else {
-                con.set_char_background(x, y, COLOR_DARK_GROUND, BackgroundFlag::Set);
-            }
+            let visible = fov_map.is_in_fov(x, y);
+            let wall = !map[x as usize][y as usize].transparent;
+
+            let color = match(visible, wall) {
+                (false, true) => COLOR_DARK_WALL,
+                (false, false) => COLOR_DARK_GROUND,
+                (true, true) => COLOR_LIGHT_WALL,
+                (true, false) => COLOR_DARK_WALL,
+            };
+            con.set_char_background(x, y, color, BackgroundFlag::Set);
         }
     }
+
+    // Draw all the objects in the list
+    for obj in objects {
+        if fov_map.is_in_fov(obj.x, obj.y) {
+            obj.draw(con);
+        }
+    }
+
     // Overlay the console over the root
     blit(con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), root, (0, 0), 1.0, 1.0);
 }
