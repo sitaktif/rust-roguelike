@@ -67,6 +67,13 @@ impl Object {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PlayerAction {
+    TookTurn,
+    DidntTakeTurn,
+    Exit,
+}
+
 /// Move object by the given amount
 /// Note: because we need to pass the object vec, we have a borrow issue if we write this as a
 ///     method: self (of type Object) would be borrowed as mutable but the vector of objects would
@@ -170,9 +177,10 @@ fn main() {
         prev_player_position = (player.x, player.y);
 
         // Handle keys and exit if needed
-        let exit = handle_keys(&mut root, &map, &mut objects);
-        if exit {
-            break;
+        match handle_keys(&mut root, &map, &mut objects) {
+            PlayerAction::TookTurn => (),
+            PlayerAction::DidntTakeTurn => (),
+            PlayerAction::Exit => break,
         }
     }
 
@@ -336,36 +344,39 @@ fn is_traversable(x: i32, y: i32, map: &Map, objects: &Vec<Object>) -> bool {
 /// # Return value
 ///
 /// A value of true means that the caller should exit.
-fn handle_keys(root: &mut Root, map: &Map, objects: &mut Vec<Object>) -> bool {
-    // TODO
+fn handle_keys(root: &mut Root, map: &Map, objects: &mut Vec<Object>) -> PlayerAction {
+
+    use self::PlayerAction::*;
+
     let key = root.wait_for_keypress(true);
+    let player_alive = objects[PLAYER_IDX].alive;
 
     let mut do_move_by = |dx: i32, dy: i32| {
-        move_by(PLAYER_IDX, dx, dy, map, objects)
+        move_by(PLAYER_IDX, dx, dy, map, objects);
+        TookTurn
     };
 
-    match key {
+    match (key, player_alive) {
         // Player movement
-        Key { code: Up, .. } | Key { printable: 'k', .. } => do_move_by(0, -1),
-        Key { code: Down, .. } | Key { printable: 'j', .. }  => do_move_by(0, 1),
-        Key { code: Left, .. } | Key { printable: 'h', .. }  => do_move_by(-1, 0),
-        Key { code: Right, .. } | Key { printable: 'l', .. }  => do_move_by(1, 0),
-        Key { printable: 'y', .. } => do_move_by(-1, -1),
-        Key { printable: 'u', .. }  => do_move_by(1, -1),
-        Key { printable: 'b', .. }  => do_move_by(-1, 1),
-        Key { printable: 'n', .. }  => do_move_by(1, 1),
+        (Key { printable: 'k', .. }, true) => do_move_by(0, -1),
+        (Key { printable: 'j', .. }, true) => do_move_by(0, 1),
+        (Key { printable: 'h', .. }, true) => do_move_by(-1, 0),
+        (Key { printable: 'l', .. }, true) => do_move_by(1, 0),
+        (Key { printable: 'y', .. }, true) => do_move_by(-1, -1),
+        (Key { printable: 'u', .. }, true) => do_move_by(1, -1),
+        (Key { printable: 'b', .. }, true) => do_move_by(-1, 1),
+        (Key { printable: 'n', .. }, true) => do_move_by(1, 1),
 
         // Alt-enter: toggle fullscreen
-        Key { code: Enter, alt: true, .. } => {
+        (Key { code: Enter, alt: true, .. }, _) => {
             root.set_fullscreen(!root.is_fullscreen());
+            DidntTakeTurn
         },
 
         // Exit the game
-        Key { code: Escape, .. } => return true,
+        (Key { code: Escape, .. }, _) => Exit,
 
         // Ignore other keys
-        _ => {},
+        _ => DidntTakeTurn,
     }
-
-    false
 }
