@@ -61,17 +61,18 @@ impl Object {
 
 #[derive(Clone, Copy, Debug)]
 struct Tile {
+    explored: bool,
     traversable: bool,
     transparent: bool,
 }
 
 impl Tile {
     pub fn empty() -> Self {
-        Tile { traversable: true, transparent: true }
+        Tile { explored: false, traversable: true, transparent: true }
     }
 
     pub fn wall() -> Self {
-        Tile { traversable: false, transparent: false }
+        Tile { explored: false, traversable: false, transparent: false }
     }
 }
 
@@ -113,7 +114,7 @@ fn main() {
 
     tcod::system::set_fps(LIMIT_FPS);
 
-    let (map, (player_x, player_y)) = make_map();
+    let (mut map, (player_x, player_y)) = make_map();
 
     let player = Object::new(player_x, player_y, '@', colors::WHITE);
     // let npc = Object::new(player.x - 1, player.y -3, '@', colors::YELLOW);
@@ -139,7 +140,7 @@ fn main() {
         let player = &mut objects[0];
 
         let fov_recompute = prev_player_position != (player.x, player.y);
-        render_all(&mut root, &mut con, &objects, &map, &mut fov_map, fov_recompute);
+        render_all(&mut root, &mut con, &objects, &mut map, &mut fov_map, fov_recompute);
 
         root.flush();
 
@@ -155,10 +156,10 @@ fn main() {
 
 }
 
-fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &Map,
+fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &mut Map,
               fov_map: &mut FovMap, fov_recompute: bool) {
     if fov_recompute {
-        // recompute FOV if needed (the player moved or something)
+        // Recompute FOV if needed (the player moved or something)
         let player = &objects[0];
         fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
     }
@@ -167,14 +168,21 @@ fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &Ma
         for x in 0..MAP_WIDTH {
             let visible = fov_map.is_in_fov(x, y);
             let wall = !map[x as usize][y as usize].transparent;
+            let explored = &mut map[x as usize][y as usize].explored;
 
             let color = match(visible, wall) {
                 (false, true) => COLOR_DARK_WALL,
                 (false, false) => COLOR_DARK_GROUND,
                 (true, true) => COLOR_LIGHT_WALL,
-                (true, false) => COLOR_DARK_WALL,
+                (true, false) => COLOR_LIGHT_GROUND,
             };
-            con.set_char_background(x, y, color, BackgroundFlag::Set);
+            if visible {
+                // Since it's visible, we should mark it as explored.
+                *explored = true;
+            }
+            if *explored {
+                con.set_char_background(x, y, color, BackgroundFlag::Set);
+            }
         }
     }
 
@@ -279,6 +287,10 @@ fn handle_keys(root: &mut Root, player: &mut Object, map: &Map) -> bool {
         Key { code: Down, .. } | Key { printable: 'j', .. }  => player.move_by(0, 1, map),
         Key { code: Left, .. } | Key { printable: 'h', .. }  => player.move_by(-1, 0, map),
         Key { code: Right, .. } | Key { printable: 'l', .. }  => player.move_by(1, 0, map),
+        Key { printable: 'y', .. } => player.move_by(-1, -1, map),
+        Key { printable: 'u', .. }  => player.move_by(1, -1, map),
+        Key { printable: 'b', .. }  => player.move_by(-1, 1, map),
+        Key { printable: 'n', .. }  => player.move_by(1, 1, map),
 
         // Alt-enter: toggle fullscreen
         Key { code: Enter, alt: true, .. } => {
