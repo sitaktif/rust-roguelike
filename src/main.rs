@@ -20,11 +20,16 @@ const MAP_HEIGHT: i32 = 45;
 const ROOM_MAX_SIZE: i32 = 10;
 const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
+const MAX_ROOM_MONSTERS: i32 = 3;
+
+const PLAYER_IDX: usize = 0;
 
 const COLOR_DARK_WALL: Color = Color { r: 0, g: 0, b: 100 };
 const COLOR_LIGHT_WALL: Color = Color { r: 130, g: 110, b: 50 };
 const COLOR_DARK_GROUND: Color = Color { r: 50, g: 50, b: 150 };
 const COLOR_LIGHT_GROUND: Color = Color { r: 200, g: 180, b: 50 };
+const COLOR_ORC: Color = colors::DESATURATED_GREEN;
+const COLOR_TROLL: Color = colors::DARKER_GREEN;
 
 const FOV_ALGO: FovAlgorithm = FovAlgorithm::Basic;
 const FOV_LIGHT_WALLS: bool = true;
@@ -34,21 +39,24 @@ struct Object {
     x: i32,
     y: i32,
     char: char,
+    name: String,
     color: Color,
+    traversable: bool,
+    alive: bool,
 }
 
 impl Object {
-    pub fn new(x: i32, y: i32, char: char, color: Color) -> Self {
+    pub fn new(x: i32, y: i32, char: char, name: &str, color: Color, traversable: bool) -> Self {
         Object {
-            x, y, char, color,
+            x, y, char, name: name.to_string(), color, traversable, alive: false
         }
     }
-    /// Move object by the given amount
-    pub fn move_by(&mut self, dx: i32, dy: i32, map: &Map) {
-        if map[(self.x + dx) as usize][(self.y + dy) as usize].traversable {
-            self.x += dx;
-            self.y += dy;
-        }
+    pub fn pos(&self) -> (i32, i32) {
+        (self.x, self.y)
+    }
+    pub fn set_pos(&mut self, x: i32, y: i32) {
+        self.x = x;
+        self.y = y;
     }
     pub fn draw(&self, con: &mut Console) {
         con.set_default_foreground(self.color);
@@ -56,6 +64,17 @@ impl Object {
     }
     pub fn clear(&self, con: &mut Console) {
         con.put_char(self.x, self.y, ' ', BackgroundFlag::None);
+    }
+}
+
+/// Move object by the given amount
+/// Note: because we need to pass the object vec, we have a borrow issue if we write this as a
+///     method: self (of type Object) would be borrowed as mutable but the vector of objects would
+///     contain a ref to self and the borrow checked wouldn't allow that.
+fn move_by(id: usize, dx: i32, dy: i32, map: &Map, objects: &mut Vec<Object>) {
+    let (x, y) = objects[id].pos();
+    if is_traversable(x + dx, y + dy, map, objects) {
+        objects[id].set_pos(x + dx, y + dy);
     }
 }
 
@@ -114,11 +133,14 @@ fn main() {
 
     tcod::system::set_fps(LIMIT_FPS);
 
-    let (mut map, (player_x, player_y)) = make_map();
+    let mut objects = Vec::new();
+    let (mut map, (player_x, player_y)) = make_map(&mut objects);
 
-    let player = Object::new(player_x, player_y, '@', colors::WHITE);
+    let mut player = Object::new(player_x, player_y, '@', "player", colors::WHITE, false);
+    player.alive = true;
+
     // let npc = Object::new(player.x - 1, player.y -3, '@', colors::YELLOW);
-    let mut objects = [player];
+    objects.insert(PLAYER_IDX, player);
 
     // Fill the field-of-view map
     let mut fov_map = FovMap::new(MAP_WIDTH, MAP_HEIGHT);
@@ -137,18 +159,18 @@ fn main() {
         con.clear();
 
         con.set_default_foreground(colors::WHITE);
-        let player = &mut objects[0];
+        let player = &mut objects[PLAYER_IDX];
 
         let fov_recompute = prev_player_position != (player.x, player.y);
         render_all(&mut root, &mut con, &objects, &mut map, &mut fov_map, fov_recompute);
 
         root.flush();
 
-        let player = &mut objects[0];
+        let player = &mut objects[PLAYER_IDX];
         prev_player_position = (player.x, player.y);
 
         // Handle keys and exit if needed
-        let exit = handle_keys(&mut root, player, &map);
+        let exit = handle_keys(&mut root, &map, &mut objects);
         if exit {
             break;
         }
@@ -160,7 +182,7 @@ fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &mu
               fov_map: &mut FovMap, fov_recompute: bool) {
     if fov_recompute {
         // Recompute FOV if needed (the player moved or something)
-        let player = &objects[0];
+        let player = &objects[PLAYER_IDX];
         fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
     }
 
@@ -197,7 +219,7 @@ fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &mu
     blit(con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), root, (0, 0), 1.0, 1.0);
 }
 
-fn make_map() -> (Map, (i32, i32)) {
+fn make_map(objects: &mut Vec<Object>) -> (Map, (i32, i32)) {
     // Fill map with untraversable tiles
     // vec![ITEM;NUM] is a macro to create a Vec of size NUM filled with ITEM (where ITEM is
     // evaluated at each iteration).
@@ -230,6 +252,9 @@ fn make_map() -> (Map, (i32, i32)) {
             // Player starts in first room, no tunnel needed.
             starting_position = (new_x, new_y);
         } else {
+            // Place objets (monsters, items, ...).
+            place_objects(&new_room, &map, objects);
+
             // All other rooms should be connected with the previous one.
             let (prev_x, prev_y) = rooms[rooms.len() - 1].center();
 
@@ -272,25 +297,63 @@ fn create_v_tunnel(y1: i32, y2: i32, x: i32, map: &mut Map) {
     }
 }
 
+/// Create objects (monsters, items) in a given room.
+fn place_objects(room: &Rect, map: &Map, objects: &mut Vec<Object>) {
+    let num_monsters = rand::thread_rng().gen_range(0, MAX_ROOM_MONSTERS + 1);
+    let Rect { x1, y1, x2, y2 } = *room;
+
+    for _ in 0..num_monsters {
+        let x = rand::thread_rng().gen_range(x1 + 1, x2);
+        let y = rand::thread_rng().gen_range(y1 + 1, y2);
+
+        if is_traversable(x, y, map, objects) {
+            // 80% chance orc, 20% troll
+            let mut new_monster = if rand::random::<f32>() < 0.8 {
+                Object::new(x, y, 'o', "orc", COLOR_ORC, false)
+            } else {
+                Object::new(x, y, 'T', "troll", COLOR_TROLL, false)
+            };
+            new_monster.alive = true;
+            objects.push(new_monster);
+        }
+    }
+}
+
+// Movement
+fn is_traversable(x: i32, y: i32, map: &Map, objects: &Vec<Object>) -> bool {
+    // Could be blocked by a tile...
+    if ! map[x as usize][y as usize].traversable {
+        return false;
+    }
+    // ...or by an object.
+    ! objects.iter().any(|o| {
+        ! o.traversable && o.pos() == (x, y)
+    })
+}
+
 /// Handle a key press event
 ///
 /// # Return value
 ///
 /// A value of true means that the caller should exit.
-fn handle_keys(root: &mut Root, player: &mut Object, map: &Map) -> bool {
+fn handle_keys(root: &mut Root, map: &Map, objects: &mut Vec<Object>) -> bool {
     // TODO
     let key = root.wait_for_keypress(true);
 
+    let mut do_move_by = |dx: i32, dy: i32| {
+        move_by(PLAYER_IDX, dx, dy, map, objects)
+    };
+
     match key {
         // Player movement
-        Key { code: Up, .. } | Key { printable: 'k', .. } => player.move_by(0, -1, map),
-        Key { code: Down, .. } | Key { printable: 'j', .. }  => player.move_by(0, 1, map),
-        Key { code: Left, .. } | Key { printable: 'h', .. }  => player.move_by(-1, 0, map),
-        Key { code: Right, .. } | Key { printable: 'l', .. }  => player.move_by(1, 0, map),
-        Key { printable: 'y', .. } => player.move_by(-1, -1, map),
-        Key { printable: 'u', .. }  => player.move_by(1, -1, map),
-        Key { printable: 'b', .. }  => player.move_by(-1, 1, map),
-        Key { printable: 'n', .. }  => player.move_by(1, 1, map),
+        Key { code: Up, .. } | Key { printable: 'k', .. } => do_move_by(0, -1),
+        Key { code: Down, .. } | Key { printable: 'j', .. }  => do_move_by(0, 1),
+        Key { code: Left, .. } | Key { printable: 'h', .. }  => do_move_by(-1, 0),
+        Key { code: Right, .. } | Key { printable: 'l', .. }  => do_move_by(1, 0),
+        Key { printable: 'y', .. } => do_move_by(-1, -1),
+        Key { printable: 'u', .. }  => do_move_by(1, -1),
+        Key { printable: 'b', .. }  => do_move_by(-1, 1),
+        Key { printable: 'n', .. }  => do_move_by(1, 1),
 
         // Alt-enter: toggle fullscreen
         Key { code: Enter, alt: true, .. } => {
