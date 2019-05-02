@@ -1,7 +1,6 @@
 extern crate tcod;
 
 use std::cmp::*;
-
 use rand::Rng;
 
 use tcod::console::*;
@@ -58,6 +57,9 @@ impl Object {
         self.x = x;
         self.y = y;
     }
+    pub fn distance_from(&self, other: &Object) -> f32 {
+        (((self.x - other.x).pow(2) + (self.y - other.y).pow(2)) as f32).sqrt()
+    }
     pub fn draw(&self, con: &mut Console) {
         con.set_default_foreground(self.color);
         con.put_char(self.x, self.y, self.char, BackgroundFlag::None);
@@ -82,6 +84,20 @@ fn move_by(id: usize, dx: i32, dy: i32, map: &Map, objects: &mut Vec<Object>) {
     let (x, y) = objects[id].pos();
     if is_traversable(x + dx, y + dy, map, objects) {
         objects[id].set_pos(x + dx, y + dy);
+    }
+}
+fn move_by_or_attack(id: usize, dx: i32, dy: i32, map: &Map, objects: &mut Vec<Object>) {
+    // The coordinates the player is moving to/attacking.
+    let x = objects[id].x + dx;
+    let y = objects[id].y + dy;
+
+    // Try to find an attackable object there.
+    let target_id = objects.iter().position(|o| { o.pos() == (x, y) });
+
+    // Attack if such an object is found.
+    match target_id {
+        Some(target_id) => println!("The {} laughs at your puny efforts to attack it!", objects[target_id].name),
+        None => move_by(id, dx, dy, map, objects),
     }
 }
 
@@ -177,10 +193,17 @@ fn main() {
         prev_player_position = (player.x, player.y);
 
         // Handle keys and exit if needed
-        match handle_keys(&mut root, &map, &mut objects) {
-            PlayerAction::TookTurn => (),
-            PlayerAction::DidntTakeTurn => (),
-            PlayerAction::Exit => break,
+        let player_action = handle_keys(&mut root, &map, &mut objects);
+        if player_action == PlayerAction::Exit {
+            break;
+        }
+        if objects[PLAYER_IDX].alive && player_action != PlayerAction::DidntTakeTurn {
+            for o in objects.iter().filter(
+                |x| (x.name) != (objects[PLAYER_IDX].name) &&
+                x.distance_from(&objects[PLAYER_IDX]) < 5_f32
+                ) {
+                println!("The {} growls!", o.name);
+            }
         }
     }
 
@@ -352,7 +375,7 @@ fn handle_keys(root: &mut Root, map: &Map, objects: &mut Vec<Object>) -> PlayerA
     let player_alive = objects[PLAYER_IDX].alive;
 
     let mut do_move_by = |dx: i32, dy: i32| {
-        move_by(PLAYER_IDX, dx, dy, map, objects);
+        move_by_or_attack(PLAYER_IDX, dx, dy, map, objects);
         TookTurn
     };
 
