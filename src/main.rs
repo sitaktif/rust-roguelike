@@ -34,6 +34,18 @@ const FOV_ALGO: FovAlgorithm = FovAlgorithm::Basic;
 const FOV_LIGHT_WALLS: bool = true;
 const TORCH_RADIUS: i32 = 10;
 
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct Fighter {
+    max_hp: i32,
+    hp: i32,
+    defence: i32,
+    power: i32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct Ai;
+
 struct Object {
     x: i32,
     y: i32,
@@ -42,12 +54,23 @@ struct Object {
     color: Color,
     traversable: bool,
     alive: bool,
+    fighter: Option<Fighter>,
+    ai: Option<Ai>,
+
 }
 
 impl Object {
     pub fn new(x: i32, y: i32, char: char, name: &str, color: Color, traversable: bool) -> Self {
         Object {
-            x, y, char, name: name.to_string(), color, traversable, alive: false
+            x,
+            y,
+            char,
+            name: name.to_string(),
+            color,
+            traversable,
+            alive: false,
+            fighter: None,
+            ai: None,
         }
     }
     pub fn pos(&self) -> (i32, i32) {
@@ -57,7 +80,7 @@ impl Object {
         self.x = x;
         self.y = y;
     }
-    pub fn distance_from(&self, other: &Object) -> f32 {
+    pub fn distance_to(&self, other: &Object) -> f32 {
         (((self.x - other.x).pow(2) + (self.y - other.y).pow(2)) as f32).sqrt()
     }
     pub fn draw(&self, con: &mut Console) {
@@ -80,7 +103,7 @@ enum PlayerAction {
 /// Note: because we need to pass the object vec, we have a borrow issue if we write this as a
 ///     method: self (of type Object) would be borrowed as mutable but the vector of objects would
 ///     contain a ref to self and the borrow checked wouldn't allow that.
-fn move_by(id: usize, dx: i32, dy: i32, map: &Map, objects: &mut Vec<Object>) {
+fn move_by(id: usize, dx: i32, dy: i32, map: &Map, objects: &mut [Object]) {
     let (x, y) = objects[id].pos();
     if is_traversable(x + dx, y + dy, map, objects) {
         objects[id].set_pos(x + dx, y + dy);
@@ -98,6 +121,33 @@ fn move_by_or_attack(id: usize, dx: i32, dy: i32, map: &Map, objects: &mut Vec<O
     match target_id {
         Some(target_id) => println!("The {} laughs at your puny efforts to attack it!", objects[target_id].name),
         None => move_by(id, dx, dy, map, objects),
+    }
+}
+
+fn move_towards(id: usize, target_x: i32, target_y: i32, map: &Map, objects: &mut [Object]) {
+    // Vector from object to target.
+    let dx = target_x - objects[id].x;
+    let dy = target_y - objects[id].y;
+    let dist = ((dx.pow(2) + dy.pow(2)) as f32).sqrt();
+
+    // Normalise the vector.
+    let dx = (dx as f32 / dist).round() as i32;
+    let dy = (dy as f32 / dist).round() as i32;
+
+    move_by(id, dx, dy, map, objects);
+}
+
+fn ai_take_turn(monster_id: usize, map: &Map, objects: &mut [Object], fov_map: &FovMap) {
+    // Basic monster takes its turn; if you can see it, it can see you.
+    let (monster_x, monster_y) = objects[monster_id].pos();
+    if fov_map.is_in_fov(monster_x, monster_y) {
+        if objects[monster_id].distance_to(&objects[PLAYER_IDX]) >= 2.0 {
+            // Move towards the player.
+            move_towards(monster_id, objects[PLAYER_IDX].x, objects[PLAYER_IDX].y, map, objects);
+        } else {
+            let monster = &objects[monster_id];
+            println!("The attack of the {} bounces off your shiny metal armor!", monster.name);
+        }
     }
 }
 
@@ -161,6 +211,7 @@ fn main() {
 
     let mut player = Object::new(player_x, player_y, '@', "player", colors::WHITE, false);
     player.alive = true;
+    player.fighter = Some(Fighter { max_hp: 30, hp: 30, defence: 2, power: 5 });
 
     // let npc = Object::new(player.x - 1, player.y -3, '@', colors::YELLOW);
     objects.insert(PLAYER_IDX, player);
@@ -200,9 +251,14 @@ fn main() {
         if objects[PLAYER_IDX].alive && player_action != PlayerAction::DidntTakeTurn {
             for o in objects.iter().filter(
                 |x| (x.name) != (objects[PLAYER_IDX].name) &&
-                x.distance_from(&objects[PLAYER_IDX]) < 5_f32
+                x.distance_to(&objects[PLAYER_IDX]) < 5_f32
                 ) {
                 println!("The {} growls!", o.name);
+            }
+        }
+        for id in 0..objects.len() {
+            if objects[id].ai.is_some() {
+                ai_take_turn(id, &map, &mut objects, &fov_map);
             }
         }
     }
@@ -340,9 +396,15 @@ fn place_objects(room: &Rect, map: &Map, objects: &mut Vec<Object>) {
         if is_traversable(x, y, map, objects) {
             // 80% chance orc, 20% troll
             let mut new_monster = if rand::random::<f32>() < 0.8 {
-                Object::new(x, y, 'o', "orc", COLOR_ORC, false)
+                let mut orc = Object::new(x, y, 'o', "orc", COLOR_ORC, false);
+                orc.fighter = Some(Fighter { max_hp: 10, hp: 10, defence: 0, power: 3});
+                orc.ai = Some(Ai);
+                orc
             } else {
-                Object::new(x, y, 'T', "troll", COLOR_TROLL, false)
+                let mut troll = Object::new(x, y, 'T', "troll", COLOR_TROLL, false);
+                troll.fighter = Some(Fighter { max_hp: 16, hp: 16, defence: 1, power: 4});
+                troll.ai = Some(Ai);
+                troll
             };
             new_monster.alive = true;
             objects.push(new_monster);
@@ -351,7 +413,7 @@ fn place_objects(room: &Rect, map: &Map, objects: &mut Vec<Object>) {
 }
 
 // Movement
-fn is_traversable(x: i32, y: i32, map: &Map, objects: &Vec<Object>) -> bool {
+fn is_traversable(x: i32, y: i32, map: &Map, objects: &[Object]) -> bool {
     // Could be blocked by a tile...
     if ! map[x as usize][y as usize].traversable {
         return false;
