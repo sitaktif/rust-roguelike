@@ -14,7 +14,12 @@ const SCREEN_HEIGHT: i32 = 50;
 const LIMIT_FPS: i32 = 40;
 
 const MAP_WIDTH: i32 = 80;
-const MAP_HEIGHT: i32 = 45;
+const MAP_HEIGHT: i32 = 43;
+
+// Panel constants.
+const BAR_WIDTH: i32 = 20;
+const PANEL_HEIGHT: i32 = 7;
+const PANEL_Y: i32 = SCREEN_HEIGHT - PANEL_HEIGHT;
 
 const ROOM_MAX_SIZE: i32 = 10;
 const ROOM_MIN_SIZE: i32 = 6;
@@ -293,6 +298,7 @@ fn main() {
     .init();
 
     let mut con = Offscreen::new(MAP_WIDTH, MAP_HEIGHT);
+    let mut panel = Offscreen::new(MAP_WIDTH, PANEL_HEIGHT);
 
     tcod::system::set_fps(LIMIT_FPS);
 
@@ -326,7 +332,7 @@ fn main() {
         let player = &mut objects[PLAYER_ID];
 
         let fov_recompute = prev_player_position != (player.x, player.y);
-        render_all(&mut root, &mut con, &objects, &mut map, &mut fov_map, fov_recompute);
+        render_all(&mut root, &mut con, &mut panel, &objects, &mut map, &mut fov_map, fov_recompute);
 
         root.flush();
 
@@ -356,10 +362,11 @@ fn main() {
 
 }
 
-fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &mut Map,
+fn render_all(root: &mut Root, con: &mut Offscreen, panel: &mut Offscreen,
+              objects: &[Object], map: &mut Map,
               fov_map: &mut FovMap, fov_recompute: bool) {
     if fov_recompute {
-        // Recompute FOV if needed (the player moved or something)
+        // Recompute FOV if needed (the player moved or something).
         let player = &objects[PLAYER_ID];
         fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
     }
@@ -386,9 +393,9 @@ fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &mu
         }
     }
 
-    // Draw all the objects in the list
+    // Draw all the objects in the list.
     let mut to_draw: Vec<_> = objects.iter().filter(|o| fov_map.is_in_fov(o.x, o.y)).collect();
-    // Sort to put non-blocking objects first
+    // Sort to put non-blocking objects first.
     to_draw.sort_by(|o1, o2| o2.traversable.cmp(&o1.traversable));
     for obj in to_draw {
         if fov_map.is_in_fov(obj.x, obj.y) {
@@ -396,13 +403,39 @@ fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], map: &mu
         }
     }
 
-    // Overlay the console over the root
+    // Overlay the console over the root.
     blit(con, (0, 0), (MAP_WIDTH, MAP_HEIGHT), root, (0, 0), 1.0, 1.0);
+
 
     // Show the player stats
     if let Some(fighter) = objects[PLAYER_ID].fighter {
-        root.print_ex(1, SCREEN_HEIGHT - 2, BackgroundFlag::None, TextAlignment::Left,
-                      format!("HP: {}/{} ", fighter.hp, fighter.max_hp));
+        // Prepare to renter the GUI panel.
+        panel.set_default_background(colors::BLACK);
+        panel.clear();
+
+        let hp = objects[PLAYER_ID].fighter.map_or(0, |f| f.hp);
+        let max_hp = objects[PLAYER_ID].fighter.map_or(0, |f| f.max_hp);
+        render_bar(
+            panel,
+            1,
+            1,
+            BAR_WIDTH,
+            "HP",
+            hp,
+            max_hp,
+            colors::LIGHT_RED,
+            colors::DARKER_RED,
+            );
+
+        blit(
+            panel,
+            (0, 0),
+            (SCREEN_WIDTH, SCREEN_HEIGHT),
+            root,
+            (0, PANEL_Y),
+            1.0,
+            1.0,
+        );
     }
 }
 
@@ -522,6 +555,41 @@ fn is_traversable(x: i32, y: i32, map: &Map, objects: &[Object]) -> bool {
     ! objects.iter().any(|o| {
         ! o.traversable && o.pos() == (x, y)
     })
+}
+
+fn render_bar(
+    panel: &mut Offscreen,
+    x: i32,
+    y: i32,
+    total_width: i32,
+    name: &str,
+    value: i32,
+    maximum: i32,
+    bar_color: Color,
+    bg_color: Color,
+) {
+    // Render a bar (HP, experience, etc). First calculate the width of the bar.
+    let bar_width = (total_width as f32 * value as f32 / maximum as f32) as i32;
+
+    // Render the bg first.
+    panel.set_default_background(bg_color);
+    panel.rect(x, y, total_width, 1, false, BackgroundFlag::Screen);
+
+    // Render the bar on top.
+    panel.set_default_background(bar_color);
+    if bar_width > 0 {
+        panel.rect(x, y, bar_width, 1, false, BackgroundFlag::Screen);
+    }
+
+    // Finally add centered text with the values.
+    panel.set_default_foreground(colors::WHITE);
+    panel.print_ex(
+        x + total_width / 2,
+        y,
+        BackgroundFlag::None,
+        TextAlignment::Center,
+        &format!("{}: {}/{}", name, value, maximum),
+    );
 }
 
 /// Handle a key press event
