@@ -7,6 +7,7 @@ use tcod::console::*;
 use tcod::colors::{self,Color};
 use tcod::input::Key;
 use tcod::input::KeyCode::*;
+use tcod::input::{self, Event, Mouse};
 use tcod::map::{Map as FovMap, FovAlgorithm};
 
 const SCREEN_WIDTH: i32 = 80;
@@ -339,6 +340,9 @@ fn main() {
         colors::RED,
     );
 
+    let mut mouse = Default::default();
+    let mut key = Default::default();
+
     while !root.window_closed() {
         // clear the screen of the previous frame
         con.clear();
@@ -346,9 +350,22 @@ fn main() {
         con.set_default_foreground(colors::WHITE);
         let player = &mut objects[PLAYER_ID];
 
+        match input::check_for_event(input::MOUSE | input::KEY_PRESS) {
+            Some((_, Event::Mouse(m))) => mouse = m,
+            Some((_, Event::Key(k))) => key = k,
+            _ => key = Default::default(),
+        }
+
         let fov_recompute = prev_player_position != (player.x, player.y);
-        render_all(&mut root, &mut con, &mut panel, &objects, &messages,
-                   &mut map, &mut fov_map, fov_recompute);
+        render_all(&mut root,
+                   &mut con,
+                   &mut panel,
+                   mouse,
+                   &objects,
+                   &messages,
+                   &mut map,
+                   &mut fov_map,
+                   fov_recompute);
 
         root.flush();
 
@@ -356,7 +373,7 @@ fn main() {
         prev_player_position = (player.x, player.y);
 
         // Handle keys and exit if needed
-        let player_action = handle_keys(&mut root, &map, &mut objects, &mut messages);
+        let player_action = handle_keys(key, &mut root, &map, &mut objects, &mut messages);
         if player_action == PlayerAction::Exit {
             break;
         }
@@ -368,19 +385,25 @@ fn main() {
                 ) {
                 log_message(&mut messages, format!("The {} growls!", o.name), colors::DARK_RED);
             }
-        }
-        for id in 0..objects.len() {
-            if objects[id].ai.is_some() {
-                ai_take_turn(id, &map, &mut objects, &mut messages, &fov_map);
+            for id in 0..objects.len() {
+                if objects[id].ai.is_some() {
+                    ai_take_turn(id, &map, &mut objects, &mut messages, &fov_map);
+                }
             }
         }
     }
 
 }
 
-fn render_all(root: &mut Root, con: &mut Offscreen, panel: &mut Offscreen,
-              objects: &[Object], messages: &Messages, map: &mut Map,
-              fov_map: &mut FovMap, fov_recompute: bool) {
+fn render_all(root: &mut Root,
+              con: &mut Offscreen,
+              panel: &mut Offscreen,
+              mouse: Mouse,
+              objects: &[Object],
+              messages: &Messages,
+              map: &mut Map,
+              fov_map: &mut FovMap,
+              fov_recompute: bool) {
     if fov_recompute {
         // Recompute FOV if needed (the player moved or something).
         let player = &objects[PLAYER_ID];
@@ -441,6 +464,16 @@ fn render_all(root: &mut Root, con: &mut Offscreen, panel: &mut Offscreen,
             max_hp,
             colors::LIGHT_RED,
             colors::DARKER_RED,
+            );
+
+        // display names of objects under the mouse
+        panel.set_default_foreground(colors::LIGHT_GREY);
+        panel.print_ex(
+            1,
+            0,
+            BackgroundFlag::None,
+            TextAlignment::Left,
+            get_names_under_mouse(mouse, objects, fov_map),
             );
 
         render_messages(messages, panel);
@@ -632,16 +665,29 @@ fn log_message<T: Into<String>>(messages: &mut Messages, message: T, color: Colo
     messages.push((message.into(), color));
 }
 
+/// return a string with the names of all objects under the mouse
+fn get_names_under_mouse(mouse: Mouse, objects: &[Object], fov_map: &FovMap) -> String {
+    let (x, y) = (mouse.cx as i32, mouse.cy as i32);
+
+    // Create a list with the names of all objects at the mouse's coordinates and in FOV.
+    let names = objects
+        .iter()
+        .filter(|obj| {obj.pos() == (x, y) && fov_map.is_in_fov(obj.x, obj.y)})
+        .map(|obj| obj.name.clone())
+        .collect::<Vec<_>>();
+
+    names.join(", ")  // Join the names, separated by commas.
+}
+
 /// Handle a key press event
 ///
 /// # Return value
 ///
 /// A value of true means that the caller should exit.
-fn handle_keys(root: &mut Root, map: &Map, objects: &mut Vec<Object>, messages: &mut Messages) -> PlayerAction {
+fn handle_keys(key: Key, root: &mut Root, map: &Map, objects: &mut Vec<Object>, messages: &mut Messages) -> PlayerAction {
 
     use self::PlayerAction::*;
 
-    let key = root.wait_for_keypress(true);
     let player_alive = objects[PLAYER_ID].alive;
 
     let mut do_move_by = |dx: i32, dy: i32| {
@@ -651,14 +697,14 @@ fn handle_keys(root: &mut Root, map: &Map, objects: &mut Vec<Object>, messages: 
 
     match (key, player_alive) {
         // Player movement
-        (Key { printable: 'k', .. }, true) => do_move_by(0, -1),
-        (Key { printable: 'j', .. }, true) => do_move_by(0, 1),
-        (Key { printable: 'h', .. }, true) => do_move_by(-1, 0),
-        (Key { printable: 'l', .. }, true) => do_move_by(1, 0),
-        (Key { printable: 'y', .. }, true) => do_move_by(-1, -1),
-        (Key { printable: 'u', .. }, true) => do_move_by(1, -1),
-        (Key { printable: 'b', .. }, true) => do_move_by(-1, 1),
-        (Key { printable: 'n', .. }, true) => do_move_by(1, 1),
+        (Key { code: Char, printable: 'k', .. }, true) => do_move_by(0, -1),
+        (Key { code: Char, printable: 'j', .. }, true) => do_move_by(0, 1),
+        (Key { code: Char, printable: 'h', .. }, true) => do_move_by(-1, 0),
+        (Key { code: Char, printable: 'l', .. }, true) => do_move_by(1, 0),
+        (Key { code: Char, printable: 'y', .. }, true) => do_move_by(-1, -1),
+        (Key { code: Char, printable: 'u', .. }, true) => do_move_by(1, -1),
+        (Key { code: Char, printable: 'b', .. }, true) => do_move_by(-1, 1),
+        (Key { code: Char, printable: 'n', .. }, true) => do_move_by(1, 1),
 
         // Alt-enter: toggle fullscreen
         (Key { code: Enter, alt: true, .. }, _) => {
