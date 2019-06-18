@@ -29,6 +29,7 @@ const ROOM_MAX_SIZE: i32 = 10;
 const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
 const MAX_ROOM_MONSTERS: i32 = 3;
+const MAX_ROOM_ITEMS: i32 = 2;
 
 const PLAYER_ID: usize = 0;
 
@@ -122,7 +123,7 @@ struct Object {
     alive: bool,
     fighter: Option<Fighter>,
     ai: Option<Ai>,
-
+    item: Option<Item>,
 }
 
 impl Object {
@@ -137,6 +138,7 @@ impl Object {
             alive: false,
             fighter: None,
             ai: None,
+            item: None,
         }
     }
 
@@ -183,6 +185,34 @@ impl Object {
     }
     pub fn clear(&self, con: &mut Console) {
         con.put_char(self.x, self.y, ' ', BackgroundFlag::None);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Item {
+    Heal,
+}
+
+fn pick_item_up(
+    object_id: usize,
+    objects: &mut Vec<Object>,
+    inventory: &mut Vec<Object>,
+    messages: &mut Messages
+    ) {
+    if inventory.len() >= 26 {
+        log_message(messages,
+                    format!("Your inventory is full, cannot pick up {}.",
+                            objects[object_id].name
+                    ),
+                    colors::RED);
+    } else {
+        let item = objects.swap_remove(object_id);
+        log_message(messages,
+                    format!("You picked up a {}.", item.name
+                    ),
+                    colors::RED
+        );
+        inventory.push(item);
     }
 }
 
@@ -343,6 +373,8 @@ fn main() {
     let mut mouse = Default::default();
     let mut key = Default::default();
 
+    let mut inventory = vec![];
+
     while !root.window_closed() {
         // clear the screen of the previous frame
         con.clear();
@@ -373,7 +405,7 @@ fn main() {
         prev_player_position = (player.x, player.y);
 
         // Handle keys and exit if needed
-        let player_action = handle_keys(key, &mut root, &map, &mut objects, &mut messages);
+        let player_action = handle_keys(key, &mut root, &map, &mut objects, &mut inventory, &mut messages);
         if player_action == PlayerAction::Exit {
             break;
         }
@@ -608,6 +640,17 @@ fn place_objects(room: &Rect, map: &Map, objects: &mut Vec<Object>) {
             objects.push(new_monster);
         }
     }
+    let num_items = rand::thread_rng().gen_range(0, MAX_ROOM_ITEMS + 1);
+    for _ in 0..num_items {
+        let x = rand::thread_rng().gen_range(x1 + 1, x2);
+        let y = rand::thread_rng().gen_range(y1 + 1, y2);
+
+        if is_traversable(x, y, map, objects) {
+            let mut object = Object::new(x, y, '!', "healing potion", colors::VIOLET, true);
+            object.item = Some(Item::Heal);
+            objects.push(object);
+        }
+    }
 }
 
 // Movement
@@ -684,7 +727,9 @@ fn get_names_under_mouse(mouse: Mouse, objects: &[Object], fov_map: &FovMap) -> 
 /// # Return value
 ///
 /// A value of true means that the caller should exit.
-fn handle_keys(key: Key, root: &mut Root, map: &Map, objects: &mut Vec<Object>, messages: &mut Messages) -> PlayerAction {
+fn handle_keys(key: Key, root: &mut Root, map: &Map,
+               objects: &mut Vec<Object>, inventory: &mut Vec<Object>,
+               messages: &mut Messages) -> PlayerAction {
 
     use self::PlayerAction::*;
 
@@ -705,6 +750,16 @@ fn handle_keys(key: Key, root: &mut Root, map: &Map, objects: &mut Vec<Object>, 
         (Key { code: Char, printable: 'u', .. }, true) => do_move_by(1, -1),
         (Key { code: Char, printable: 'b', .. }, true) => do_move_by(-1, 1),
         (Key { code: Char, printable: 'n', .. }, true) => do_move_by(1, 1),
+
+        (Key {code: Char, printable: 'g', .. }, true) => {
+            // pick an item
+            let item_id = objects.iter().position(
+                |object| object.pos() == objects[PLAYER_ID].pos() && object.item.is_some());
+            if let Some(item_id) = item_id {
+                pick_item_up(item_id, objects, inventory, messages);
+            }
+            DidntTakeTurn
+        }
 
         // Alt-enter: toggle fullscreen
         (Key { code: Enter, alt: true, .. }, _) => {
